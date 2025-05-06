@@ -1,0 +1,1526 @@
+---
+title: "Epigenomic Analysis in Monocytes: Histones marks and Transcriptional factors"
+author: "Paola Albarrán Godoy, Ariadna Badia Zamudio, Yael Daniel Hernandez Gonzalez"
+date: "`r Sys.Date()`"
+output: 
+  html_document: # El output controla los parámetros de salida del renderizado
+    collapsed: false            # Contraer celdas de salida
+    code_folding: show          # Mostrar el código
+    toc: true                   # Mostrar la tabla de contenidos
+    toc_depth: 4                # Niveles de títulos que se mostrarán
+    toc_float: true             # Índices o contenidos flotantes
+    smooth_scroll: true         # Activar el scroll
+    highlight: kate             # Destacar
+    df_print: paged             # Mostrar los dataframes en páginas
+    number_sections: false       # Numeración de contenidos
+    theme: flatly
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+The article *"Lineage-Specific Genome Architecture Links Enhancers and
+Non-coding Disease Variants to Target Gene Promoters"* investigates how
+lineage-specific genome architecture contributes to connecting enhancers
+and non-coding disease variants with their target gene promoters. To
+better understand how specific genomic features---such as chromatin
+loops and topologically associating domains (TADs)---mediate these
+interactions in a cell type-specific manner, the authors integrate
+computational and experimental approaches. Their findings highlight the
+role of genome architecture in shaping regulatory landscapes that
+underlie tissue- and cell-type-specific gene expression and disease
+susceptibility.
+
+H3K27ac is a histone modification associated with active enhancers and
+promoters, marking regions of open chromatin and transcriptional
+activity. It plays a crucial role in gene regulation and is
+context-dependent, dynamic, and functionally linked to cell identity and
+disease. In this study, we analyzed the enrichment of H3K27ac in
+promoters and PIRs (promoter-interacting regions) of **CD14⁺ monocytes**
+using ENCODE ChIP-Seq data. Our aim was to better understand the
+epigenetic mechanisms underlying gene regulation in monocytes, focusing
+on how H3K27ac contributes to establishing and maintaining cell
+type-specific transcriptional programs. Since transcription factors
+often function in a cell type-specific manner, we further explored which
+TF motifs are enriched in monocyte promoters and PIRs using pattern
+matching approaches. This allowed us to infer potential regulators that
+may cooperate with H3K27ac to drive monocyte-specific gene expression.
+
+# Pipeline (With Code)
+
+## File preprocessing
+
+We download from the [page](https://osf.io/u8tzp/files/osfstorage) the
+interaction file `PCHiC_peak_matrix_cutoff5.txt.gz` .
+
+And then upload the file to the cluster with:
+
+```         
+scp /home/yael/Descargas/PCHiC_peak_matrix_cutoff5.txt.gz yhernandezg@dna.lavis.unam.mx:/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data
+```
+
+After, the link
+[epigenomesportal](https://epigenomesportal.ca/ihec/grid.html?build=2020-10&assembly=4&institutions=4&cellTypeCategories=1)
+the histone mark H3K27ac of the CD14-positive monocyte cell type was
+chosen.
+
+We opened the link [encode
+project](https://www.encodeproject.org/experiments/ENCSR000ASJ/) , and
+selected the reference genome hg19, the filters in bigwig files \> fold
+change over control \> replicates 1,2, and we obtained that the file
+would be
+[ENCFF931PZJ](https://www.encodeproject.org/files/ENCFF931PZJ/).
+
+**Generate bigwig from fastq**
+
+To generate the bigWig files from the FASTQ files in the ChIP-seq
+experiment (ENCSR000ASJ), the process followed by the ENCODE pipeline is
+summarized in the following steps:
+
+1.  Initial Processing (ChIP-seq Mapping Pipeline)
+
+    -   Input: FASTQ files (can be paired reads, single stranded or non
+        strand specific).
+
+    -   Concatenation: If there are multiple FASTQ files from the same
+        biological replicate (e.g. separate sequencing runs), they are
+        concatenated before mapping,
+
+    -   Mapping:Reads are aligned to the reference genome (hg19) using
+        tools not specified in the papers (but commonly BWA, Bowtie2, or
+        MAQ are used)
+
+    -   Filtering: Reads with multiple alignments are removed.
+
+    -   Output: BAM files with filtered alignments.
+
+2.  Signal generation (ChIP-seq Pipeline Overview)
+
+    -   Input: BAM files of replicates and controls.
+
+    -   Fragment density calculation:
+
+        -   IGVtools count is used with the parameters:
+
+            -   -w 25: 25 bp window to calculate density.
+
+            -   -f mean: Reports the average signal value in the window.
+
+            -   -e 200: Extends reads to 200 bp (typical for ChIP-seq).
+
+            -   Intermediate output: File in WIG format.
+
+    -   Conversion to bigWig: WigToBigWig (from the UCSC Kent package)
+        is used to convert the WIG to bigWig, an efficient binary
+        format.
+
+3.  Standardization and final signal
+
+    -   The bigWig signal is normalized by control (Input) to generate
+        fold-over-control plots or p-values .
+
+    -   This is done for each replicate and for pooled replicates.
+
+A job
+[prepare_monocyte_data.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/prepare_monocyte_data.sh),
+for processing, is commanded to prepare epigenomic data related to
+promoter-PIR interactions in monocytes, downloading files, filtering
+relevant interactions and generating clean BED files.
+
+```         
+cd /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data
+
+#Download the H3K27ac BigWig file directly from ENCODE.
+
+wget -O ENCFF931PZJ.bigWig "https://www.encodeproject.org/files/ENCFF931PZJ/@@download/ENCFF931PZJ.bigWig"
+```
+
+-O ENCFF931PZJ.bigWig indicates the name under which the file will be
+saved.
+
+```         
+zcat PCHiC_peak_matrix_cutoff5.txt.gz | awk -F'\t' 'NR==1 || $12 > 0' > monocyte_interactions.tsv
+```
+
+-   zcat: decompress the .gz file.
+
+-   awk -F'\\t': uses tabulator as field separator.
+
+-   NR==1 \|\| \$12 \> 0: keep header (NR==1) and rows where column 12
+    (score) is greater than 0.
+
+-   Save the result in monocyte_interactions.tsv.
+
+```         
+awk -F'\t' '
+NR>1 && ($1 ~ /^[0-9XY]+$/) && ($1 != "Y" || $3 <= 57227415) {
+  print "chr"$1"\t"$2"\t"$3"\t"$4
+}' monocyte_interactions.tsv \
+| awk '$1 ~ /^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)$/' \
+| sort -k1,1 -k2,2n | uniq > Monocyte_Promoters_mainChr.bed
+
+awk -F'\t' '
+NR>1 && ($6 ~ /^[0-9XY]+$/) && ($6 != "Y" || $8 <= 57227415) {
+  print "chr"$6"\t"$7"\t"$8"\t"$9
+}' monocyte_interactions.tsv \
+| awk '$1 ~ /^chr([1-9]|1[0-9]|2[0-2]|X|Y|M)$/' \
+| sort -k1,1 -k2,2n | uniq > Monocyte_PIRs_mainChr.bed
+```
+
+-   First awk: takes rows with numerical chromosomes, X or Y, and
+    discards regions outside the known Y chromosome boundary (avoids
+    errors due to incorrect annotations).
+
+-   Adds the prefix "chr" to chromosome names.
+
+-   Second awk: filters only standard human chromosomes (1-22, X, Y, M).
+
+-   sort: sort by chromosome and starting position.
+
+-   uniq: remove duplicates.
+
+-   Result: clean BED file with promoter regions.
+
+## Histone Marks Enrichment
+
+### Signal in Promoters and PIRs
+
+Then to obtain the histone signal in chromosomal regions given in the
+.bed files, generated from the interactions file, the job was sent
+[Histone_Signal.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Histone_Signal.sh)
+which performs BED file filtering according to the actual chromosome
+size (obtained from the BigWig file) and then calculates the H3K27ac
+signal.
+
+```         
+INPUT_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+OUTPUT_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results"
+
+module load UCSC-executables/12may2022
+```
+
+Variables are defined for input and output routes. and load UCSC tools
+subset.
+
+```         
+bigWigInfo "${INPUT_DIR}/ENCFF931PZJ.bigWig" -chroms | awk '{print $1"\t"$3}' > "${INPUT_DIR}/chrom_sizes.txt"
+```
+
+-   bigWigInfo file.bigWig -chroms: lists the chromosomes in the BigWig
+    file with their size.
+
+-   The output contains three columns: chromosome name, number of bases
+    and total size.
+
+-   awk '{print \$1"\\t"\$3}': extracts only the chromosome name (\$1)
+    and its length (\$3).
+
+-   Result: chrom_sizes.txt file with two columns: chrN \<length\>.
+
+```         
+awk '
+  BEGIN { FS=OFS="\t" }
+  FNR==NR { chr_len[$1]=$2; next }
+  $1 in chr_len && $3 <= chr_len[$1]
+' "${INPUT_DIR}/chrom_sizes.txt" "${INPUT_DIR}/Monocyte_Promoters_mainChr.bed" > "${INPUT_DIR}/Monocyte_Promoters_final.bed"
+
+awk '
+  BEGIN { FS=OFS="\t" }
+  FNR==NR { chr_len[$1]=$2; next }
+  $1 in chr_len && $3 <= chr_len[$1]
+' "${INPUT_DIR}/chrom_sizes.txt" "${INPUT_DIR}/Monocyte_PIRs_mainChr.bed" > "${INPUT_DIR}/Monocyte_PIRs_final.bed"
+```
+
+-   This awk compares two files:
+
+    -   First, it reads chrom_sizes.txt and stores the maximum sizes per
+        chromosome in chr_len.
+
+    -   Then, it processes Monocyte_Promoters_mainChr.bed and discards
+        any lines where the final coordinate \$3 exceeds the chromosome
+        length.
+
+-   This is crucial to avoid errors when tools like bigWigAverageOverBed
+    try to access out-of-range positions.
+
+```         
+bigWigAverageOverBed \
+"${INPUT_DIR}/ENCFF931PZJ.bigWig" \
+"${INPUT_DIR}/Monocyte_Promoters_final.bed" \
+"${OUTPUT_DIR}/promoters_signal.tab"
+
+bigWigAverageOverBed \
+"${INPUT_DIR}/ENCFF931PZJ.bigWig" \
+"${INPUT_DIR}/Monocyte_PIRs_final.bed" \
+"${OUTPUT_DIR}/PIRs_signal.tab"
+```
+
+bigWigAverageOverBed: calculates the signal average of a BigWig file
+over the regions specified in a BED file.
+
+-   The output includes columns such as:
+
+    -   region name,
+
+    -   size,
+
+    -   number of bases covered,
+
+    -   sum of values,
+
+    -   signal average.
+
+Then, we upload the output files `PIRs_signal.tab` and
+`promoters_signal.tab` to our local repository.
+
+### Heatmaps display
+
+We generate signal heatmaps from bed and bigwig files, through the job
+[heatmaps.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/heatmaps.sh)
+. Calculate matrices of epigenomic signal coverage values (in this case,
+H3K27ac) around regions of interest (promoters and PIRs).
+
+```         
+BW="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data/ENCFF931PZJ.bigWig"
+PROMOTERS="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data/Monocyte_Promoters_final.bed"
+PIRS="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data/Monocyte_PIRs_final.bed"
+OUT="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results"
+
+### Promoters
+computeMatrix reference-point \
+    -S $BW \
+    -R $PROMOTERS \
+    --referencePoint center \
+    -a 2000 -b 2000 \
+    --binSize 50 \
+    --missingDataAsZero \
+    -out $OUT/matrix_H3K27ac_promoters.tab.gz
+    
+### PIRs
+computeMatrix reference-point \
+    -S $BW \
+    -R $PIRS \
+    --referencePoint center \
+    -a 2000 -b 2000 \
+    --binSize 50 \
+    --missingDataAsZero \
+    -out $OUT/matrix_H3K27ac_PIRs.tab.gz
+```
+
+Where:
+
+-   reference-point:
+
+    -   Calculation mode where regions of interest are aligned by a
+        reference point (e.g. center, TSS, TES).
+
+-   -S \$BW (\--scoreFileName):
+
+    -   bigWig file containing the epigenomic signal (H3K27ac) to be
+        analyzed.
+
+-   -R \$PROMOTERS or \$PIRS (\--regionsFileName):
+
+    -   BEDs file with the genomic coordinates of the promoters and
+        PIRs.
+
+-   \--referencePoint center:
+
+    -   Reference point to align the regions. In this case, the center
+        of each BED region.
+
+    -   Common alternatives: TSS (start of transcription) or TES (end of
+        transcription).
+
+-   -a 2000 -b 2000 (\--beforeRegionStartLength /
+    \--afterRegionStartLength):
+
+    -   Defines a window of 2000 bp upstream (-a) and 2000 bp downstream
+        (-b) of the reference point.
+
+    -   That is, a 4 kb region centered on the promoter is analyzed.
+
+-   \--binSize 50:
+
+    -   Divides each region into bins (intervals) of 50 bp and
+        calculates the average signal in each bin.
+
+    -   This reduces noise and simplifies visualization.
+
+-   \--missingDataAsZero:
+
+    -   Treats regions with no data in the bigWig as zeros (avoids
+        errors due to missing values).
+
+-   -out :
+
+    -   Saves the compressed matrix in .tab.gz format.
+
+```         
+### Promoters
+plotHeatmap \
+    -m $OUT/matrix_H3K27ac_promoters.tab.gz \
+    -out $OUT/heatmap_H3K27ac_promoters.png \
+    --refPointLabel "center" \
+    --heatmapHeight 10 \
+    --regionsLabel "Promoters" \
+    --plotTitle "A. H3K27ac signal at Promoters" \
+    --colorMap "RdBu" \
+    
+### PIRs    
+plotHeatmap \
+    -m $OUT/matrix_H3K27ac_PIRs.tab.gz \
+    -out $OUT/heatmap_H3K27ac_PIRs.png \
+    --refPointLabel "center" \
+    --heatmapHeight 10 \
+    --regionsLabel "PIRs" \
+    --plotTitle "B. H3K27ac signal at PIRs" \
+    --colorMap "RdBu"
+```
+
+Where:
+
+-   -m (\--matrixFile)
+
+    -   Specifies the input matrix generated by computeMatrix
+
+-   -out
+
+    -   Defines the output file
+
+    -   Supported format: .png, .pdf, .svg, etc.
+
+-   \--refPointLabel "center"
+
+    -   Label of the reference point (in this case, the center of the
+        regions).
+
+    -   It will appear on the X axis of the heatmap.
+
+-   \--heatmapHeight 10
+
+    -   Height of the heatmap in cm (useful to adjust the visual
+        aspect).
+
+-   \--regionsLabel "Promoters" or "PIRs"
+
+    -   Label for the regions (appears in the legend).
+
+-   \--plotTitle
+
+    -   Graph title.
+
+-   \--colorMap "RdBu"
+
+    -   Color palette (in this case, divergent Red-Blue).
+
+Also, we generated z-scored signal heatmaps, to compare better the
+spacial patterns, regardless of the magnitude. We send this job
+[heatmaps_zcore.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/heatmaps_zcore.sh)
+
+We use the same matrix that the other heatmaps. And only add the option
+\--zMin -3 \--zMax 3 to normalizate both of the matrix in the heatmaps.
+
+## Transcriptional Factors Enrichment in motifs
+
+We now move on to identify TF binding sites by means of matrix-based
+pattern matching. We will search for motifs within sequences and their
+hits with transcriptional factors.
+
+### Extract sequences
+
+First we extract the sequence from the coordinates of the .bed files and
+the reference genome (hg19.fa). By means of the following job
+[extract_sequences.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/extract_sequences.sh)
+
+```         
+module load bedtools/2.27.1
+
+INPUT_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+
+bedtools getfasta -fi "$INPUT_DIR/hg19.fa" -bed "$INPUT_DIR/Monocyte_Promoters_final.bed" -fo "$INPUT_DIR/promoters.fa"
+bedtools getfasta -fi "$INPUT_DIR/hg19.fa" -bed "$INPUT_DIR/Monocyte_PIRs_final.bed" -fo "$INPUT_DIR/PIRs.fa"
+```
+
+Where:
+
+-   -fi: Specifies the input FASTA file (in this case, the reference
+    genome hg19).
+
+-   -bed: Indicates the BED file containing the genomic coordinates of
+    the regions to be extracted.
+
+-   -fo: Especifica el archivo FASTA de salida donde se guardarán las
+    secuencias extraídas.
+
+### Shuffled sequences
+
+We then generated permuted sequences for both .fasta files, as these
+will be our controls under randomization and can later compare
+statistically whether the motif with the transcription factor is
+significantly relevant. First we generated the script in R for the
+permuted sequences
+[sequences_shuffle](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/sequences_shuffle.R)
+
+```         
+suppressPackageStartupMessages({
+  library(Biostrings)
+})
+
+# ------------ 1. Entrada de argumentos----------------
+args <- commandArgs(trailingOnly = TRUE)
+
+if (length(args) < 3) {
+  cat("Uso: Rscript shuffle_fasta.R <input.fa> <output.fa> <kmer_size>\n")
+  quit(status = 1)
+}
+
+input_file <- args[1]       # FASTA de entrada
+output_file <- args[2]      # FASTA de salida
+kmer_size <- as.integer(args[3])  # tamaño de k-mer a conservar
+```
+
+The script receives three parameters from the command line:
+
+-   \<input.fa\>: input FASTA file with DNA sequences.
+
+-   \<output.fa\>: Output FASTA file with permuted sequences.
+
+-   \<kmer_size\>: Size of the k-mers to be retained during permutation.
+
+If the required arguments are not provided, the script displays a help
+message and terminates
+
+```         
+set.seed(42) # reproducibilidad
+
+# ------------ 2. Función de permutación---------------
+shuffle_sequence <- function(seq, k) {
+  seq <- toupper(as.character(seq))
+  nucs <- strsplit(seq, "")[[1]]
+  
+  if (k <= 1) {
+    return(paste(sample(nucs), collapse = ""))
+  } else {
+    kmers <- substring(seq, seq(1, nchar(seq) - k + 1, by = k), seq(k, nchar(seq), by = k))
+    shuffled_kmers <- sample(kmers)
+    return(paste(shuffled_kmers, collapse = ""))
+  }
+}
+```
+
+This function takes a DNA sequence and permutes it in two ways,
+depending on the value of k:
+
+-   If k \<= 1:
+
+    -   It decomposes the sequence into individual nucleotides.
+
+    -   It mixes them randomly (sample(nucs)).
+
+-   If k \> 1:
+
+    -   Splits the sequence into k-mers (subsequences of length \*k\*).
+
+    -   Mixes the order of the k-mers, but preserves their internal
+        composition
+
+```         
+# ------------ 3. Leer FASTA---------------------------
+cat("Leyendo archivo:", input_file, "...\n")
+sequences <- readDNAStringSet(input_file)
+
+# ------------ 4. Aplicar permutación------------------
+cat("Generando permutaciones...\n")
+shuffled_seqs <- DNAStringSet(
+  sapply(as.character(sequences), shuffle_sequence, k = kmer_size)
+)
+names(shuffled_seqs) <- names(sequences)
+```
+
+Use the readDNAStringSet function of the Biostrings package to load the
+sequences into memory.
+
+Applies the shuffle_sequence function to each FASTA sequence.
+
+Retain the names of the original sequences in the result.
+
+```         
+# ------------ 5. Guardar resultado-------------------
+cat("Guardando resultado en:", output_file, "\n")
+writeXStringSet(shuffled_seqs, output_file)
+
+# ------------ 6. Reporte básico-----------------------
+cat("\n=== Reporte de Calidad ===\n")
+cat("Total de secuencias:", length(sequences), "\n")
+cat("Longitud promedio original:", round(mean(width(sequences))), "bp\n")
+cat("Longitud promedio permutada:", round(mean(width(shuffled_seqs))), "bp\n")
+```
+
+Write the permuted sequences to a new FASTA file using writeXStringSet.
+
+The script generates a summary with:
+
+-   Total number of sequences processed.
+
+-   Average length before and after permutation.
+
+-   Optional k-mers comparison (if k \> 1), showing the frequency of
+    some k-mers in a random sequence.
+
+Then we sent a job
+[generate_sequences.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/generate_sequences.sh)
+to run the R script for each fasta.
+
+```         
+DATA_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+SCRIPT="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/scripts/sequences_shuffle.R"
+
+# Ejecutar para promoters
+echo "Permutando promoters.fa..."
+Rscript "$SCRIPT" "$DATA_DIR/promoters.fa" "$DATA_DIR/promoters_shuffled.fa" 2
+
+# Ejecutar para PIRs
+echo "Permutando PIRs.fa..."
+Rscript "$SCRIPT" "$DATA_DIR/PIRs.fa" "$DATA_DIR/PIRs_shuffled.fa" 2
+```
+
+We also downloaded the non-redundant JASPAR collection for RSAT in
+transfac format. Using the job
+[Download_jaspar_rsat.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Download_jaspar_rsat.sh)
+
+### Backgrounds models
+
+We generate background models for developers and PIRs. These models
+provide a statistical baseline to assess whether the observed frequency
+of a motif is significant or random. They were generated using the
+following jobs
+[Create_BM_Promoters.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Create_BM_Promoters.sh)
+and
+[Create_BM_PIRs.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Create_BM_PIRs.sh)
+
+```         
+module load rsat/8sep2021
+
+# --- Directorios ---
+DATA_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+
+#----Concatenar archivos---
+cat "$DATA_DIR/promoters.fa" "$DATA_DIR/promoters_shuffled.fa" > "$DATA_DIR/promoters_combined.fa"
+
+cat "$DATA_DIR/PIRs.fa" "$DATA_DIR/PIRs_shuffled.fa" > "$DATA_DIR/PIRs_combined.fa"
+
+#----Generar el background model---
+create-background-model \
+  -i "$DATA_DIR/promoters_combined.fa" \
+  -markov 1 \
+  -out_format oligo-analysis \
+  -o "$DATA_DIR/promoters_bm.bg"
+
+create-background-model \
+  -i "$DATA_DIR/PIRs_combined.fa" \
+  -markov 1 \
+  -out_format oligo-analysis \
+  -o "$DATA_DIR/PIRs_bm.bg"
+```
+
+Where:
+
+-   -i :Input FASTA file containing the original + permuted sequences.
+
+-   -markov 1: Specifies the order of the Markov model (in this case, 1
+    = first order model).
+
+-   -out_format oligo-analysis: Output format compatible with RSAT tools
+    such as oligo-analysis and matrix-scan.
+
+-   -o: Output file where the background model will be saved.
+
+Permuted and real rates were concatenated to balance the model, avoid
+overfitting and improve generalization.
+
+### Matrix-scan
+
+Next, we ran a matrix-scan that identifies transcription factor binding
+motifs in DNA sequences. It compares the sequences against a matrix of
+known motif weights (JASPAR) and predicts significant binding sites.
+
+For this part of the analysis, matrix-scan was run for permuted
+promoters as follows with this job
+[RSAT_Promoters_Shuffled.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/RSAT_Promoters_Shuffled.sh)
+
+```         
+# --- Directorios ---
+DATA_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+MOTIFS_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/motifs"
+RESULTS_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results"
+
+# Ejecutar matrix-scan-quick
+matrix-scan \
+  -quick \
+  -i "$DATA_DIR/promoters_shuffled.fa" \
+  -m "$MOTIFS_DIR/JASPAR2022_CORE_non-redundant_pfms_transfac.txt" \
+  -matrix_format transfac \
+  -seq_format fasta \
+  -origin start \
+  -lth score 0.8 \
+  -bgfile "$DATA_DIR/promoters_bm.bg" \
+  -2str \
+  -o "$RESULTS_DIR/matrixscan_promoters_shuffled.tsv"
+```
+
+Where:
+
+-   -quick : Fast mode (optimized for speed, less accuracy possible).
+
+-   -i : FASTA file with sequences
+
+-   -m File with motif matrices in TRANSFAC format (from JASPAR 2022).
+
+-   -matrix_format: Indicates that the matrices are in TRANSFAC format.
+
+-   -seq_format: Format of the input sequences (FASTA).
+
+-   -origin: Consider the start position of the sequence as a reference
+    for the coordinates.
+
+-   -lth score : Minimum score threshold for reporting a reason (range:
+    0 to 1).
+
+-   -bgfile: Background model to normalize scores.
+
+-   -2str: Scans both strands (sense and antisense) of DNA.
+
+-   -o: Output file in TSV format (tab-separated values).
+
+Due to the long execution time that matrix-scan takes to run through all
+sequences and motifs. For real promoters and both real and permuted
+PIRs, each of the fastas was divided into 24 individual files (due to
+the number of chromosomes) for each fasta file.
+
+The job sent to split the fasta files was as follows
+[Split_fasta_by_chr_pirs.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Split_fasta_by_chr_pirs.sh)
+
+```         
+DATA_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+REAL_OUT="$DATA_DIR/pirs_real_fasta_chr"
+SHUFFLED_OUT="$DATA_DIR/pirs_shuffled_fast_chr"
+
+CHROMOSOMES=$(seq 1 22)
+CHROMOSOMES+=" X Y"
+
+# Dividir PIRs.fa (real)
+for CHR in $CHROMOSOMES; do
+    awk -v chr="$CHR" 'BEGIN{RS=">"; FS="\n"} $1 ~ ("chr" chr) {print ">" $0}' "${DATA_DIR}/PIRs.fa" > "${REAL_OUT}/chr${CHR}.fa"
+done
+
+# Dividir PIRs_shuffled.fa (shuffled)
+for CHR in $CHROMOSOMES; do
+    awk -v chr="$CHR" 'BEGIN{RS=">"; FS="\n"} $1 ~ ("chr" chr) {print ">" $0}' "${DATA_DIR}/PIRs_shuffled.fa" > "${SHUFFLED_OUT}/chr${CHR}.fa"
+done
+
+REAL_OUT="$DATA_DIR/promoters_real_fast_chr"
+
+# Dividir promoters.fa (real)
+for CHR in $CHROMOSOMES; do
+    awk -v chr="$CHR" 'BEGIN{RS=">"; FS="\n"} $1 ~ ("chr" chr) {print ">" $0}' "${DATA_DIR}/promoters.fa" > "${REAL_OUT}/chr${CHR}.fa"
+done
+```
+
+Where:
+
+-   -v chr="\$CHR": Pass the current chromosome number (CHR) as a chr
+    variable to awk.
+
+-   BEGIN{RS="\>"; FS="}:
+
+    -   RS="\>": Defines the record separator as \> (each FASTA sequence
+        starts with \>).
+
+    -   FS="\\n": Uses line breaks as field separator to process headers
+        and sequences separately.
+
+-   \$1 \~ ("chr" chr): Filters sequences whose header (\$1) matches the
+    pattern "chr" followed by the chromosome number (e.g. chr1, chrX).
+
+-   {print "\>" \$0}: Rebuilds the FASTA format (adds \> to the
+    beginning of each record).
+
+-   Save the sequences in files such as \${REAL_OUT}/chr\${CHR}.fa
+
+Real promoters fasta file was split in other job
+[Split_fasta_by_chr_promoters.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Split_fasta_by_chr_promoters.sh)
+with the same configuration and options than PIRs.
+
+Then, for each individual phage per chromosome, DNA binding motif
+scanning was applied by matrix-scan in parallel.
+
+The following job
+[Submit_matrixscan_jobs_pirs.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Submit_matrixscan_jobs_pirs.sh)
+creates a job array with 48 tasks (24 chromosomes x 2 conditions) and
+another job with 24 tasks for real promoters
+[Submit_matrixscan_jobs_promoters.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Submit_matrixscan_jobs_promoters.sh).
+
+```         
+# ===== Configuración de rutas =====
+DATA_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/data"
+REAL_FASTA_DIR="${DATA_DIR}/pirs_real_fasta_chr"
+SHUFFLED_FASTA_DIR="${DATA_DIR}/pirs_shuffled_fast_chr"
+MOTIFS_FILE="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/motifs/JASPAR2022_CORE_non-redundant_pfms_transfac.txt"
+BG_FILE="${DATA_DIR}/PIRs_bm.bg"
+RESULTS_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/matrixscan_chr"
+
+# ===== Determinar tipo (real/shuffled)  y cromosoma =====
+CHROMOSOMES=( $(seq 1 22) X Y )
+
+if [ $SGE_TASK_ID -le 24 ]; then
+    TYPE="real"
+    CHR_IDX=$((SGE_TASK_ID - 1))
+    CHROMOSOME=${CHROMOSOMES[$CHR_IDX]}
+    INPUT_FASTA="${REAL_FASTA_DIR}/chr${CHROMOSOME}.fa"
+    OUTPUT_TSV="${RESULTS_DIR}/pirs_real/chr${CHROMOSOME}.tsv"
+else
+    TYPE="shuffled"
+    CHR_IDX=$((SGE_TASK_ID - 25))
+    CHROMOSOME=${CHROMOSOMES[$CHR_IDX]}
+    INPUT_FASTA="${SHUFFLED_FASTA_DIR}/chr${CHROMOSOME}.fa"
+    OUTPUT_TSV="${RESULTS_DIR}/pirs_shuffled/chr${CHROMOSOME}.tsv"
+fi
+```
+
+The job automatically determines whether to process real sequences
+(tasks 1-24) or permuted sequences (tasks 25-48) and the corresponding
+chromosome. The configuration of matrix-scan is the same as described
+for shuffled_promoters.
+
+The individual tsv files per chromosome were then concatenated into one
+tsv file per condition.
+
+```         
+cd /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/matrixscan_chr/promoters_real
+(head -n 1 chr1.tsv && tail -n +2 -q chr*.tsv) > ../../matrixscan_complete/matrixscan_promoters_real.tsv
+
+#*This was not executed because they did not finish running the rsat per chromosome of PIRs.*
+
+cd /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/matrixscan_chr/pirs_real
+(head -n 1 chr1.tsv && tail -n +2 -q chr*.tsv) > ../../matrixscan_complete/matrixscan_pirs_real.tsv
+
+cd /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/matrixscan_chr/pirs_shuffled
+(head -n 1 chr1.tsv && tail -n +2 -q chr*.tsv) > ../../matrixscan_complete/matrixscan_pirs_shuffled.tsv
+```
+
+### Statistical Analysis
+
+Due to the long run time of PIRs in matrixscan, only the statistical
+analysis for promoters was performed.
+
+To answer the question.
+
+*Is the presence of the TF motif dependent on the sequence type (real or
+permuted), or is it expected by chance?*
+
+We first processed the TSV files containing scan results of
+transcription factor motifs (TFs) in promoter sequences, both real and
+shuffled, by counting the unique occurrences of each TF in the sequences
+and the total number of unique sequences. Using the following jobs.
+
+-   [Count_promoters_real.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Count_promoters_real.sh)
+
+-   [Count_promoters_shuffled.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Count_promoters_shuffled.sh)
+
+```         
+INPUT="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/matrixscan_complete/matrixscan_promoters_shuffled.tsv"
+OUTPUT_DIR="/mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/counts_tsv"
+TMPDIR="/tmp/$USER/$JOB_ID"  # Directorio temporal local para I/O rápido
+mkdir -p "$TMPDIR"
+mkdir -p "$OUTPUT_DIR"
+
+NUM_CORES=${NSLOTS:-1}
+export LC_ALL=C  # Acelera 'sort'
+
+# Extraer columnas 1 y 3, eliminar duplicados
+echo "Extrayendo columnas relevantes (secuencia y TF)..."
+cut -f1,3 "$INPUT" > "$TMPDIR/cols.tsv"
+
+echo "  Eliminando duplicados..."
+sort --parallel="$NUM_CORES" -u -T "$TMPDIR" "$TMPDIR/cols.tsv" > "$TMPDIR/shuffled_tfs_unique.tsv"
+```
+
+Extract columns 1 (sequence_id) and 3(TF) to analyze which TFs bind to
+each sequence.
+
+Then remove duplicates of sequence + TF with sort -u, ensuring that each
+unique interaction is counted only once.
+
+```         
+echo "  Contando ocurrencias por TF..."
+awk '
+  { count[$2]++ }
+  END {
+    for (tf in count) print tf, count[tf]
+  }' "$TMPDIR/shuffled_tfs_unique.tsv" > "$OUTPUT_DIR/shuffled_counts.tsv"
+
+echo "  Contando número total de secuencias únicas..."
+cut -f1 "$TMPDIR/shuffled_tfs_unique.tsv" | sort --parallel="$NUM_CORES" -u | wc -l > "$OUTPUT_DIR/total_shuffled.txt"
+
+echo "  Limpiando temporales..."
+rm -rf "$TMPDIR"
+```
+
+Then using awk, generate a TSV file with the count of how many unique
+sequences are associated to each TF, then count the total number of
+unique sequences (regardless of the TF) and save the result in a text
+file.
+
+It occupies a temporary directory for fast I/O and parallelizes the sort
+with multiple cores. Temporary files are cleaned at the end.
+
+We performed an enrichment analysis of transcription factors (TFs) using
+Fisher's exact test. For each TF, a 2×2 contingency matrix was
+constructed comparing its binding frequency in real promoters versus
+shuffled promoters (negative control). The matrices contained:
+
+-   **Rows**: Real vs. shuffled sequences.
+
+-   **Columns**: Sequences with the TF binding site vs. sequences
+    without it.
+
+Fisher's exact test (one-tailed, `alternative = "greater"`) was applied
+to each TF's matrix to assess statistical significance of enrichment in
+real promoters. *P*-values were adjusted for multiple testing using the
+Benjamini-Hochberg false discovery rate (FDR). TFs with an FDR \< 0.05
+were considered significantly enriched.
+
+The analysis was implemented in R
+[fisher_test_TFs.R](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/fisher_test_TFs.R)
+which processed the outputs from `Count_promoters_real.sh` and
+`Count_promoters_shuffled.sh`.
+
+|                            | Real | Shuffled |
+|----------------------------|------|----------|
+| TF occurrences encountered | a    | b        |
+| Sequences without TF       | c    | d        |
+
+Where:
+
+-   a: number of occurrences of the TF motif in real promoters (from
+    matrixscan_promoters_real.tsv).
+
+-   b: occurrences in permuted promoters
+    (matrixscan_promoters_shuffled.tsv).
+
+-   c: total real sequences - a
+
+-   d: total of permuted sequences - b
+
+We ran the described script by means of a job
+[Fisher_test_promoters.sh](https://github.com/YaelHernG/Epigenomics/blob/main/Scripts/Fisher_test_promoters.sh)
+
+```         
+Rscript fisher_test_TFs.R \
+  /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/counts_tsv/real_counts.tsv \
+  /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/counts_tsv/shuf_counts.tsv \
+  /mnt/atgc-d1/bioinfoII/yhernandezg/epigenomica/results/promoters_fisher_results.csv
+```
+
+# Analysis
+
+## Enrichment of H3K27ac in promoters and PIR's
+
+To evaluate the differential enrichment of the histone mark H3K27ac in
+functional regulatory regions, we analyzed the signal intensity over
+**promoters** and **promoter-interacting regions (PIRs)** in CD14+
+monocytes using the data processed from the BigWig file `ENCFF931PZJ`.
+After filtering and quality control, we compared the log-transformed
+signal distributions between both types of regions.
+
+```{r, echo=TRUE,warning=FALSE, message=FALSE, out.width='100%', fig.show='hold', fig.cap="**Figure 1.** Violin plot of the log₁₀-transformed H3K27ac signal in CD14⁺ monocyte promoters and PIRs. The distribution of signal intensity is shown for each type of region: promoters (blue) and PIRs (red)."}
+library(ggplot2)
+library(dplyr)
+#Subir los archivos de señal de la histona para los promotores y PIR's
+promoters = read.table("/home/yael/2025-2/Bioinformatica/Epigenomica/data/promoters_signal.tab", header = FALSE)
+pirs = read.table("/home/yael/2025-2/Bioinformatica/Epigenomica/data/PIRs_signal.tab", header = FALSE)
+
+#Asignar nombres a las columnas
+colnames(promoters) <- colnames(pirs) <- c("ID", "size", "covered", "sum", "mean0", "mean1")
+
+# Extraer la señal promedio (usaremos mean0)
+signal_promoters <- promoters$mean0
+signal_pirs <- pirs$mean0
+
+# Combinar en un data frame para graficar
+signal_data <- data.frame(
+  Signal = c(signal_promoters, signal_pirs),
+  Region = c(rep("Promoter", length(signal_promoters)), rep("PIR", length(signal_pirs)))
+)
+
+
+signal_data_filtered <- signal_data %>% filter(Signal > 0)
+signal_data_filtered$LogSignal <- log10(signal_data_filtered$Signal)
+
+ggplot(signal_data_filtered, aes(x = Region, y = LogSignal, fill = Region)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  labs(title = "H3K27ac Signal", y = "log10(Signal)", x = "") +
+  theme_minimal()+ 
+    theme(
+    text = element_text(size = 13),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+The violin plot (Figure 1) illustrates the log-transformed signal
+distribution of H3K27ac in promoters and PIRs. **Promoters** exhibit a
+significantly higher mean and median signal intensity, with a compact
+distribution concentrated at higher values. This is consistent with
+their role as transcription initiation sites, where active chromatin is
+expected.
+
+In contrast, **PIRs** show a broader distribution with lower median
+signal and higher variance, suggesting that these distal regulatory
+elements have more heterogeneous chromatin states. The presence of
+H3K27ac in PIRs supports their potential enhancer-like activity, but
+with less consistent activation compared to promoters.
+
+```{r, message= FALSE,warning= FALSE, echo=TRUE, out.width='100%', fig.show='hold', fig.cap="**Figure 2.** Density plot of the log₁₀-transformed H3K27ac signal in CD14⁺ monocyte promoters and PIRs. The plot shows the normalized distribution of signal intensity across both types of regulatory regions. Promoters are shown in cyan and PIRs in red."}
+library(tidyverse)
+# Añadir columna de tipo
+promoters <- promoters %>% mutate(type = "Promoters")
+pirs <- pirs %>% mutate(type = "PIRs")
+
+# Unir ambos
+all_data <- bind_rows(promoters, pirs)
+
+# Quitar valores cero para evitar -Inf en log10
+all_data_filtered <- all_data %>%
+  filter(mean0 > 0) %>%
+  mutate(log10_signal = log10(mean0))
+
+# Graficar
+ggplot(all_data_filtered, aes(x = log10_signal, fill = type, color = type)) +
+  geom_density(alpha = 0.4) +
+  labs(
+    title = "Logarithmic distribution of H3K27ac signal",
+    x = expression(log[10]*"(average signal per region)"),
+    y = "Density",
+    fill = "Region",
+    color = "Region"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 13),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+The density plot (Figure 2) reveals the global distribution of H3K27ac
+signal intensities on a logarithmic scale. The distribution for
+promoters is skewed toward higher values, indicating consistent
+enrichment of this active histone mark, in line with their role in
+transcription initiation. Promoters exhibit a shoulder at log₁₀(signal)
+\> 0, suggesting a subset of highly acetylated regions.
+
+In contrast, the PIR distribution is more narrowly centered and peaks at
+lower signal values, with most regions exhibiting modest H3K27ac levels.
+This supports the idea that, while some PIRs may be active enhancers
+marked by H3K27ac, the overall population is more heterogeneous in
+chromatin state and activity.
+
+This visualization complements the violin and boxplots by emphasizing
+the **distributional differences** beyond central tendency, making it
+clear that **promoters are more consistently marked** with H3K27ac,
+while **PIRs display greater variability** and a substantial fraction
+with low or no enrichment.
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE, out.width='100%', fig.cap="**Figure 3.** Heatmaps of raw H3K27ac signal enrichment in (A) promoters and (B) promoter-interacting regions (PIRs) from CD14⁺ monocytes. Each row represents an individual genomic region (±2 kb from the center), with signal intensity scaled from low (red) to high (blue). No z-score normalization."}
+library(ggplot2)
+library(patchwork)
+library(png)
+library(grid)
+
+# Cargar imágenes como objetos raster
+img1 <- readPNG("/home/yael/2025-2/Bioinformatica/Epigenomica/figures/heatmap_H3K27ac_promoters.png")
+img2 <- readPNG("/home/yael/2025-2/Bioinformatica/Epigenomica/figures/heatmap_H3K27ac_PIRs.png")
+
+# Convertir imágenes a objetos ggplot
+g1 <- ggplot() + 
+  annotation_custom(rasterGrob(img1)) + 
+  theme_void()
+
+g2 <- ggplot() + 
+  annotation_custom(rasterGrob(img2)) + 
+  theme_void()
+
+# Combinar con patchwork
+combined_plot <- g1 + g2 + 
+  plot_layout(ncol = 2) 
+
+print(combined_plot)
+
+```
+
+**The raw signal heatmaps (Figure 3)** provide spatial information on
+H3K27ac enrichment around the centers of regulatory regions (±2 kb).
+
+In **panel A (promoters)**, we observe a strong, symmetric enrichment
+pattern centered at the TSS, with an intense blue band indicating high
+acetylation levels. This consistent, centralized signal is
+characteristic of active promoters, where H3K27ac marks transcription
+initiation sites. The symmetry around the center suggests a
+well-positioned nucleosomal arrangement flanking the TSS.
+
+In contrast, **panel B (PIRs)** displays a more heterogeneous pattern.
+The signals are generally weaker (lighter blue or yellow tones) and
+scattered across the ±2 kb window. Some PIRs show focal points of
+H3K27ac enrichment, consistent with potential active enhancers, while
+others exhibit minimal acetylation, reinforcing the variability seen in
+the violin and density plots (Figures 1--2).
+
+Overall, the raw heatmaps highlight the differential intensity and
+spatial coherence of H3K27ac enrichment between promoters and PIRs,
+reflecting their distinct regulatory architectures.
+
+To further dissect spatial patterns of H3K27ac enrichment, we applied
+z-score normalization to the signal profiles (Figure 4). This approach
+standardizes each region's signal to its local mean, reveal the relative
+enrichment patterns of H3K27ac, independent of absolute signal strength.
+
+```{r, echo=FALSE,warning=FALSE, message=FALSE, out.width='100%', fig.cap="**Figure 4.**Z-score-normalized H3K27ac signal in (A) promoters and (B) PIRs from CD14⁺ monocytes- **Color scale:** -3σ (red, below mean) to +3σ (blue, above mean).   **Rows:** Regions sorted by signal intensity (±2 kb from center).             **Dashed boxes:** Highlight consistent spatial patterns (e.g., central peak in promoters, asymmetric peaks in PIRs). *Z-score normalization reveals relative enrichment patterns independent of absolute signal levels, emphasizing shape differences between regions.*"}
+library(ggplot2)
+library(patchwork)
+library(png)
+library(grid)
+
+# Cargar imágenes como objetos raster
+img1 <- readPNG("/home/yael/2025-2/Bioinformatica/Epigenomica/figures/heatmap_H3K27ac_promoters_zcore.png")
+img2 <- readPNG("/home/yael/2025-2/Bioinformatica/Epigenomica/figures/heatmap_H3K27ac_PIRs_zcore.png")
+
+# Convertir imágenes a objetos ggplot
+g1 <- ggplot() + 
+  annotation_custom(rasterGrob(img1)) + 
+  theme_void()
+
+g2 <- ggplot() + 
+  annotation_custom(rasterGrob(img2)) + 
+  theme_void()
+
+# Combinar con patchwork
+combined_plot <- g1 + g2 + 
+  plot_layout(ncol = 2) 
+
+print(combined_plot)
+```
+
+In **panel A (promoters)**, there is a sharp, centralized peak of
+enrichment (dark blue at 0 kb), with surrounding areas quickly returning
+to baseline (white). This strong, localized enrichment indicates a tight
+focus of acetylation precisely at the TSS. The consistency of the
+pattern across most rows (highlighted by the dashed box) confirms that
+promoter activation is highly stereotyped in CD14⁺ monocytes.
+
+In **panel B (PIRs)**, the enrichment patterns are more variable and
+asymmetric. Some PIRs show enrichment peaks offset from the center, and
+others display broader or multiple peaks within the ±2 kb window. This
+heterogeneity suggests diverse modes of regulatory activation among
+PIRs, consistent with their function as enhancers, which can vary in
+strength and spatial organization.
+
+The z-score normalization emphasizes that while both promoters and PIRs
+can show H3K27ac enrichment, **promoters have a more focused and uniform
+activation profile**, whereas **PIRs display greater variability both in
+location and intensity of enrichment**.
+
+Together, violin plots, density distributions, and heatmaps provide a
+consistent and comprehensive view of H3K27ac signal enrichment across
+promoters and PIRs. These complementary visualizations reveal both
+global trends and local variations, reinforcing the functional
+distinction between these regulatory regions. Overall, they offer a
+robust framework to interpret the epigenetic landscape shaping gene
+regulation in CD14+ monocytes.
+
+**Statistical Test**
+
+To assess whether the observed differences in H3K27ac signal between
+promoters and PIRs are statistically significant, we performed a
+**Wilcoxon rank-sum test** (non-parametric), given that the
+log-transformed signal values still showed asymmetric distributions.
+
+```{r}
+wilcox.test(signal_promoters, signal_pirs)
+```
+
+The test yielded a **p-value \< 2.2e-16**, indicating a **highly
+significant difference** between the two distributions. This confirms
+that the enrichment of H3K27ac is systematically greater at promoter
+regions than at PIRs in monocytes.
+
+**Descriptive Statistics**
+
+Below are the summary statistics for the untransformed H3K27ac signal
+(`mean0`) in both types of regions:
+
+```{r}
+# Calcular estadísticas para cada tipo
+stats_table <- all_data %>%
+  group_by(type) %>%
+  summarise(
+    n_total = n(),
+    mean_signal = mean(mean0),
+    median_signal = median(mean0),
+    sd_signal = sd(mean0),
+    iqr_signal = IQR(mean0),
+    max_signal = max(mean0),
+    prop_above_0_5 = sum(mean0 > 0.5) / n()
+  )
+
+# Opcional: versión en formato tabla visual
+library(knitr)
+kable(stats_table, digits = 3, caption = "Descriptive statistics of signal H3K27ac")
+```
+
+The difference in medians (6.45 vs 1.53) and means (6.84 vs 2.03)
+clearly reflects the functional distinction between these genomic
+elements in terms of chromatin accessibility and transcriptional
+activity.
+
+Together with the statistical test and summary statistics, these results
+strengthen the interpretation that H3K27ac is not only **more enriched**
+in promoters but also **more stably associated** with their functional
+role, whereas its presence in PIRs is **more variable and potentially
+context-dependent**, as would be expected for distal enhancers whose
+activity can be dynamic across conditions or cell states.
+
+## Transcription factor motif enrichment in monocyte promoters
+
+To investigate the potential regulatory logic embedded in CD14⁺ monocyte
+promoters, we conducted a **motif enrichment analysis using RSAT
+(matrix-scan)** with the non-redundant JASPAR collection. Promoter
+sequences (±250 bp from the TSS) were compared to shuffled controls to
+distinguish biologically relevant motifs from background noise.
+Enrichment was assessed via **Odds ratio** (magnitude of enrichment) and
+**FDR-adjusted p-values** (statistical significance)
+
+### Motif enrichment by observed frequency
+
+The top 15 transcription factor (TF) motifs with the highest absolute
+number of enriched matches in real promoters, compared to permuted
+controls. (Figure 5)
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE, out.width='100%', fig.cap="**Figure 5.** Top 15 transcription factor motifs most enriched in CD14⁺ monocyte promoters (relative to permuted background), ranked by odds ratio. Bars represent the log-odds of motif enrichment, indicating the strength of association between each TF motif and the set of real promoter sequences. These TFs are likely to play key roles in monocyte-specific transcriptional regulation"}
+library(ggplot2)
+
+# Importa los archivos
+fisher_all <- read.csv("/home/yael/2025-2/Bioinformatica/Epigenomica/data/promoters_fisher_results.csv")
+fisher_sig <- read.csv("/home/yael/2025-2/Bioinformatica/Epigenomica/data/promoters_fisher_results_significant.csv")
+
+top_tf <- fisher_sig[order(-fisher_sig$odds_ratio), ][1:15, ]
+
+ggplot(top_tf, aes(x = reorder(ft_name, odds_ratio), y = odds_ratio)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 15 most enriched TFs in real promoters",
+    x = "Transcriptional Factor",
+    y = "Odds ratio"
+  ) +
+  theme_minimal()
+```
+
+Prominent among them are:
+
+-   **BPC family members** (BPC1, BPC5, BPC6), zinc-finger proteins
+    linked to chromatin architecture and transcriptional repression in
+    plant systems, suggesting possible motif similarity to human C2H2
+    zinc fingers.
+
+-   **EWSR1-FLI1**, a fusion TF from Ewing sarcoma, with known
+    ETS-family DNA-binding preferences, possibly reflecting
+    overrepresented ETS-like motifs in monocyte promoters.
+
+-   **blmp-1** and **eor-1**, C. elegans homologs of mammalian **PRDM1
+    (BLIMP1)** and chromatin remodeling factors---indicating
+    cross-species motif homology for immune regulation.
+
+-   **STAT-family members** (STAT1, STAT3, STAT1::STAT2, STAT5a::STAT5b)
+    dominate the list, consistent with their **central role in
+    interferon signaling and immune cell differentiation**.
+
+-   **MEF2C**, a master regulator of monocyte/macrophage lineage
+    commitment.
+
+-   **skn-1** and **STB3**, yeast/plant homologs with
+    antioxidant/stress-response motifs
+
+-   **RLM1**, a MADS-box TF linked to osmotic stress---again possibly
+    indicative of mammalian MEF2/MYOD homologs.
+
+This set highlights a strong enrichment of immune-related and
+differentiation-associated TFs in monocyte promoters, especially those
+involved in **JAK-STAT signaling**, **hematopoietic development**, and
+**stress-responsive pathways**.
+
+Some TFs, such as BPC family members, blmp-1, or eor-1, originate from
+non-human organisms in the JASPAR database. Their enrichment in human
+promoter sequences likely reflects motif similarity to human zinc finger
+or chromatin regulators rather than direct functional roles.
+
+### Motif enrichment based on statistical significance (FDR)
+
+We show the TF motifs with the **lowest FDR values**, capturing the most
+robust enrichments independent of absolute motif counts. (Figure 6)
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE, out.width='100%', fig.cap="**Figure 6.** Top 15 transcription factor motifs with most statistically significant enrichment (lowest FDR values) in CD14⁺ monocyte promoters. Bars represent –log₁₀(FDR), highlighting motifs that are most significantly overrepresented relative to random sequences."}
+top_fdr <- fisher_sig[order(fisher_sig$fdr), ][1:15, ]
+top_fdr$log10_fdr <- -log10(top_fdr$fdr)
+
+ggplot(top_fdr, aes(x = reorder(ft_name, log10_fdr), y = log10_fdr)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(
+    title = "Top 15 most significant TFs by FDR",
+    x = "Transcriptional Factor",
+    y = "-log10(FDR)"
+  ) +
+  theme_minimal()
+```
+
+-   **Nr2F6**, a nuclear receptor linked to **immune tolerance and
+    T-cell suppression**, ranks at the top, suggesting **direct
+    regulatory roles in monocyte gene silencing or immune modulation**.
+
+-   Consistent enrichment of **BPC1, BPC5, BPC6**, again showing
+    cross-species similarity and possible relevance of **C2H2-type zinc
+    finger motifs**.
+
+-   **Rarg** and **Rarb**, retinoic acid receptors, reflect
+    **developmental signaling pathways** relevant to monocyte
+    maturation.
+
+-   **NFKB1**, a key TF in **inflammation and immune activation**, shows
+    significant enrichment, validating the functional relevance of the
+    method.
+
+-   **REST**, a repressor associated with **silencing of neuronal genes
+    in non-neuronal tissues**, appears enriched, potentially marking
+    **repression of lineage-inappropriate programs**.
+
+-   **SPT15** and **FKH1**, again from yeast, likely represent
+    homologous motifs for **TATA-binding protein (TBP)** and **FOXO
+    family** TFs, both important in transcriptional regulation under
+    stress or metabolic states.
+
+-   **MEF2D**, a paralog of MEF2C, further reinforces the importance of
+    **myeloid differentiation TFs** in promoter architecture.
+
+Taken together, the statistical enrichment points to **functionally
+diverse yet coherent sets of TFs** acting in concert to orchestrate
+monocyte-specific transcriptional programs.
+
+### Motif enrichment landscape: Volcano plot
+
+To integrate both the magnitude and significance of motif enrichment, we
+generated a volcano plot summarizing log₂(odds ratio) versus
+--log₁₀(FDR) for all TF motifs (Figure 7). This visualization highlights
+motifs that are both strongly enriched and statistically significant.
+Motifs falling in the upper-right quadrant (log₂OR \> 1 and FDR \< 0.05)
+represent the most robust candidates for functional relevance in
+monocyte promoter regulation.
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE, out.width='100%', fig.cap="**Figure. 7** Volcano plot of TFs motif enrichment in CD14⁺ monocyte promoters. Shown is log2(odds ratio) versus -log10(FDR) for each motif identified by RSAT compared with permuted sequences. Significantly enriched motifs (FDR < 0.05 and log2OR > 1) are highlighted in red. More robust motifs (FDR < 1e-10 and log2OR > 1.5) are labeled."}
+
+fisher_sig$log2_OR <- log2(fisher_sig$odds_ratio)
+fisher_sig$neg_log10_fdr <- -log10(fisher_sig$fdr)
+
+
+ggplot(fisher_sig, aes(x = log2_OR, y = neg_log10_fdr)) +
+  geom_point(alpha = 0.6, color = "gray40") +
+  geom_point(data = subset(fisher_sig, fdr < 0.05 & log2_OR > 1),
+             aes(x = log2_OR, y = neg_log10_fdr), color = "red") +
+  geom_text(data = subset(fisher_sig, fdr < 1e-10 & log2_OR > 1.5),
+            aes(label = ft_name), vjust = 1.2, size = 3.5) +
+  labs(
+    title = "Volcano plot: TFs enriched in real promoters",
+    x = "log2(Odds Ratio)",
+    y = "-log10(FDR)"
+  ) +
+  theme_minimal()
+```
+
+Notably, TFs such as STAT1, MEF2C, NFKB1, and Nr2F6 appear among the
+most prominent hits, consistent with known roles in immune regulation.
+Several motifs from non-human TFs also cluster in this region,
+suggesting conserved DNA-binding logic. This integrated view supports
+the presence of a core regulatory program centered on immune,
+differentiation, and stress-response pathways in CD14⁺ monocytes.
+
+Collectively, our motif enrichment analysis reveals a coherent
+regulatory landscape in CD14⁺ monocyte promoters, dominated by
+transcription factors implicated in immune signaling, hematopoietic
+lineage commitment, and cellular stress responses. Both ranking
+strategies---by odds ratio and by FDR---consistently highlight STAT
+family members, MEF2 paralogs, and zinc-finger proteins, suggesting
+their central role in establishing and maintaining monocyte-specific
+gene expression.
+
+The volcano plot further reinforces this interpretation, showcasing a
+cluster of robustly enriched motifs with high effect sizes and
+statistical confidence. Notably, the presence of conserved or homologous
+motifs from non-human systems (e.g., BPC, SPT15, FKH1) points to deeper
+structural constraints in promoter sequence evolution or to shared
+functional logic across species. Overall, these findings support the
+hypothesis that monocyte promoters harbor a distinct repertoire of
+regulatory elements finely tuned for immune identity and responsiveness.
+
+### Questions
+
+1.  **Why does the JASPAR non-redundant collection should be used?**
+
+    The non-abundant JASPAR collection has the advantage of identifying
+    transcription factors (TFs) in promoters or enhancers due to its
+    precision in including TFs specific to these regulatory regions,
+    which reduces noise and increases the biological relevance of the
+    results. This focus also facilitates the interpretation of the data
+    by limiting the number of TFs to be analyzed, which allows the most
+    relevant TFs to be identified more clearly for the study context.
+
+2.  **Why does usign permuted sequences serve as a control?**
+
+    It is useful for noise reduction, because it provides a reference to
+    evaluate the results obtained with the original sequences. Comparing
+    the results obtained with the original sequences versus the permuted
+    ones allows us to distinguish between real signal and background
+    noise. If significant patterns are observed in the original
+    sequences that are not present in the permuted ones, it is more
+    likely that these patterns are biologically relevant and not simply
+    the result of chance or methodological biases.
+
+# Conclusion
+
+Our analysis of H3K27ac enrichment in CD14+ monocytes demonstrates that
+this epigenetic mark is significantly more enriched in promoters than in
+distal interacting regions (PIRs), both in terms of raw signal and its
+overall distribution. This result is consistent with the
+well-established role of H3K27ac as a marker of transcriptional
+activity, particularly in active promoter regions.
+
+The more homogeneous and elevated distribution in promoters suggests
+that acetylation in these regions is more tightly regulated, whereas in
+PIRs it may reflect a broader spectrum of regulatory states, possibly
+associated with functional diversity and specific contexts of gene
+activation.
+
+Complementary transcription factor motif analysis, performed only on
+promoter sequences, identified a significantly enriched set of binding
+sites relative to permuted sequences. This indicates that the active
+promoters in monocytes are not only enriched in H3K27ac, but also
+present a distinct repertoire of regulatory motifs that could mediate
+transcriptional specificity in this cell type. This convergence between
+epigenetic modification and recognition signals by transcriptional
+factors reinforces the biological functionality of these regions as
+centers of regulatory integration.
+
+Taken together, these results support the choice of H3K27ac as an
+epigenetic marker to study the functionality of promoter regions and
+allow us to discriminate between regions with different regulatory
+potential in the context of CD14+ monocytes.
+
+# References
+
+## Articles
+
+-   Barozzi I, Simonatto M, Bonifacio S, Yang L, Rohs R, Ghisletti S,
+    Natoli G. Coregulation of transcription factor binding and
+    nucleosome occupancy through DNA features of mammalian enhancers.
+    Mol Cell. 2014 Jun 5;54(5):844-857. doi:
+    10.1016/j.molcel.2014.04.006. Epub 2014 May 8. PMID: 24813947;
+    PMCID: PMC4048654.
+
+-   Gosselin D, Link VM, Romanoski CE, Fonseca GJ, Eichenfield DZ, Spann
+    NJ, Stender JD, Chun HB, Garner H, Geissmann F, Glass CK.
+    Environment drives selection and function of enhancers controlling
+    tissue-specific macrophage identities. Cell. 2014 Dec
+    4;159(6):1327-40. doi: 10.1016/j.cell.2014.11.023. PMID: 25480297;
+    PMCID: PMC4364385.
+
+-   Javierre BM, Burren OS, Wilder SP, Kreuzhuber R, Hill SM, Sewitz S,
+    Cairns J, Wingett SW, Várnai C, Thiecke MJ, Burden F, Farrow S,
+    Cutler AJ, Rehnström K, Downes K, Grassi L, Kostadima M,
+    Freire-Pritchett P, Wang F; BLUEPRINT Consortium; Stunnenberg HG,
+    Todd JA, Zerbino DR, Stegle O, Ouwehand WH, Frontini M, Wallace C,
+    Spivakov M, Fraser P. Lineage-Specific Genome Architecture Links
+    Enhancers and Non-coding Disease Variants to Target Gene Promoters.
+    Cell. 2016 Nov 17;167(5):1369-1384.e19. doi:
+    10.1016/j.cell.2016.09.037. PMID: 27863249; PMCID: PMC5123897.
+
+-   Jolma A, Yan J, Whitington T, Toivonen J, Nitta KR, Rastas P,
+    Morgunova E, Enge M, Taipale M, Wei G, Palin K, Vaquerizas JM,
+    Vincentelli R, Luscombe NM, Hughes TR, Lemaire P, Ukkonen E, Kivioja
+    T, Taipale J. DNA-binding specificities of human transcription
+    factors. Cell. 2013 Jan 17;152(1-2):327-39. doi:
+    10.1016/j.cell.2012.12.009. PMID: 23332764.
+
+-   Turatsinze, J.-V., Thomas-Chollier, M., Defrance, M., & van
+    Helden, J. (2008). Using RSAT to scan genome sequences for
+    transcription factor binding sites and cis-regulatory modules.
+    Nature Protocols, 3(10), 1578--1588.
+    <https://doi.org/10.1038/nprot.2008.97>
+
+## Software Used
+
+-   **Data Processing & File Management**
+
+    -   `awk` 4.0.2 -- Text processing for BED files
+
+    -   `wc` (GNU coreutils) 8.22 -- Line counting
+
+    -   `wget` 1.4 -- File downloads from ENCODE
+
+    -   `zcat` (gzip) 1.5 -- Decompression of `.gz` files
+
+-   **Genomic Tools**
+
+    -   `BEDTools` 2.27.1 -- Sequence extraction (`getfasta`)
+
+    -   `UCSC tools`:
+
+        -   `bigWigInfo` -- Chromosome size extraction
+
+        -   `bigWigAverageOverBed` -- Signal quantification
+
+-   **Epigenomic Analysis**
+
+    -   `DeepTools` 2.5.3:
+
+        -   `computeMatrix` -- Signal aggregation
+
+        -   `plotHeatmap` -- Visualization of H3K27ac patterns
+
+-   **Motif Analysis**
+
+    -   `RSAT` 8sep2021:
+
+        -   `create-background-model` -- Markov chain modeling
+
+        -   `matrix-scan` -- TF motif scanning (JASPAR 2022)
+
+-   **Statistical Analysis & Scripting**
+
+    -   `R` 4.0.2 & 4.4.2 -- Fisher's exact tests, data wrangling
+
+        -   Key packages: `data.table`, `Biostrings` (for sequence
+            shuffling)
+
+-   **Visualization & Utilities**
+
+    -   `ImageMagick` (`convert`) -- Heatmap concatenation (optional)
+
+## GitHub Reference
+
+All scripts are available in the [Epigenomics
+repository](https://github.com/YaelHernG/Epigenomics/tree/main/Scripts)
