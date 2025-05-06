@@ -1,4 +1,4 @@
-# Epigenomic Analysis in Monocytes: Histones marks and Transcriptional factors"
+# Epigenomic Analysis in Monocytes: Histones marks and Transcriptional factors
 
 ## Members:
 - Paola Albarrán Godoy
